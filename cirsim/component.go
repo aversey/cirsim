@@ -12,26 +12,25 @@ import (
 	"github.com/wcharczuk/go-chart/v2/drawing"
 )
 
-type Component struct {
+type component struct {
 	widget.BaseWidget
-	Pos             fyne.Position
-	Model           Modeler
-	CurrentOverTime []float64
-	ANode           *Node
-	BNode           *Node
-	CurrentRange    chart.Range
-	Image           *canvas.Image
+	modeler
+	pos             fyne.Position
+	currentOverTime []float64
+	nodes           [2]int
+	currentRange    chart.Range
+	chart           *canvas.Image
 	labels          []*widget.Label
 	entries         []*widget.Entry
 }
 
-func NewComponent(settings io.Reader, r chart.Range, nodes []*Node, update func()) *Component {
-	var c Component
+func newComponent(settings io.Reader, r chart.Range, update func()) *component {
+	var c component
 	var t string
 	var a int
 	var b int
 	_, err := fmt.Fscanf(settings, "%f %f %s %d %d\n",
-		&c.Pos.X, &c.Pos.Y, &t, &a, &b,
+		&c.pos.X, &c.pos.Y, &t, &a, &b,
 	)
 	if err != nil {
 		return nil
@@ -39,25 +38,23 @@ func NewComponent(settings io.Reader, r chart.Range, nodes []*Node, update func(
 	if a <= 0 || b <= 0 {
 		log.Fatal("unconnected components in the circuit")
 	}
-	c.ANode = nodes[a-1]
-	nodes[a-1].AComponents = append(nodes[a-1].AComponents, &c)
-	c.BNode = nodes[b-1]
-	nodes[b-1].BComponents = append(nodes[b-1].BComponents, &c)
-	switch t {
-	case "resistor":
-		c.Model = &Resistor{100.0}
-	case "capacitor":
-		c.Model = &Capacitor{0.000001}
-	case "inductor":
-		c.Model = &Inductor{0.000001}
-	case "diode":
-		c.Model = &Diode{}
-	case "power":
-		c.Model = &Power{Current: 1.0, Frequency: 1000.0}
+	c.nodes[0] = a - 1
+	c.nodes[1] = b - 1
+	c.setupModeler(t, update)
+	c.currentRange = r
+	c.currentOverTime = make([]float64, iterations)
+	for i := range c.currentOverTime {
+		c.currentOverTime[i] = 0
 	}
+	c.renderChart()
+	return &c
+}
+
+func (c *component) setupModeler(name string, update func()) {
+	c.modeler = newModeler(name)
 	c.entries = make([]*widget.Entry, 0)
 	c.labels = make([]*widget.Label, 0)
-	for k, v := range c.Model.Parameters() {
+	for k, v := range c.parameters() {
 		e := widget.NewEntry()
 		e.TextStyle.Monospace = true
 		e.SetPlaceHolder(k)
@@ -66,9 +63,9 @@ func NewComponent(settings io.Reader, r chart.Range, nodes []*Node, update func(
 			var v float64
 			_, err := fmt.Sscanf(s+"\n", "%f\n", &v)
 			if err != nil {
-				e.SetText(fmt.Sprintf("%f", c.Model.Parameters()[k]))
+				e.SetText(fmt.Sprintf("%f", c.parameters()[k]))
 			} else {
-				c.Model.UpdateParameter(k, v)
+				c.updateParameter(k, v)
 				update()
 			}
 		}
@@ -77,36 +74,29 @@ func NewComponent(settings io.Reader, r chart.Range, nodes []*Node, update func(
 		l.TextStyle.Monospace = true
 		c.labels = append(c.labels, l)
 	}
-	c.CurrentRange = r
-	c.CurrentOverTime = make([]float64, 1000)
-	for i := range c.CurrentOverTime {
-		c.CurrentOverTime[i] = 0
-	}
-	c.renderChart()
-	return &c
 }
 
-func (c *Component) renderChart() {
+func (c *component) renderChart() {
 	graph := chart.Chart{
-		Width:        140,
-		Height:       60,
+		Width:        chartWidth,
+		Height:       chartHeight,
 		ColorPalette: &componentColorPalette{},
 		XAxis:        chart.HideXAxis(),
 		YAxis: chart.YAxis{
 			Style: chart.Hidden(),
-			Range: c.CurrentRange,
+			Range: c.currentRange,
 		},
 		Series: []chart.Series{
 			chart.ContinuousSeries{
-				XValues: chart.LinearRange(0, 999),
-				YValues: c.CurrentOverTime,
+				XValues: chart.LinearRange(0, float64(iterations)-1),
+				YValues: c.currentOverTime,
 			},
 		},
 	}
 	writer := &chart.ImageWriter{}
 	graph.Render(chart.PNG, writer)
 	img, _ := writer.Image()
-	c.Image = canvas.NewImageFromImage(img)
+	c.chart = canvas.NewImageFromImage(img)
 }
 
 type componentColorPalette struct{}
@@ -118,7 +108,12 @@ func (*componentColorPalette) BackgroundStrokeColor() drawing.Color {
 	return drawing.ColorTransparent
 }
 func (*componentColorPalette) CanvasColor() drawing.Color {
-	return drawing.Color{R: 191, G: 254, B: 247, A: 128}
+	return drawing.Color{
+		R: currentCanvasR,
+		G: currentCanvasG,
+		B: currentCanvasB,
+		A: currentCanvasA,
+	}
 }
 func (*componentColorPalette) CanvasStrokeColor() drawing.Color {
 	return drawing.ColorTransparent
@@ -130,25 +125,25 @@ func (*componentColorPalette) TextColor() drawing.Color {
 	return drawing.ColorTransparent
 }
 func (*componentColorPalette) GetSeriesColor(index int) drawing.Color {
-	return drawing.Color{R: 3, G: 247, B: 198, A: 255}
+	return drawing.Color{R: currentR, G: currentG, B: currentB, A: currentA}
 }
 
-func (c *Component) CreateRenderer() fyne.WidgetRenderer { return c }
-func (c *Component) Layout(s fyne.Size) {
+func (c *component) CreateRenderer() fyne.WidgetRenderer { return c }
+func (c *component) Layout(s fyne.Size) {
 	pos := fyne.NewPos(0, 0)
 	for i, e := range c.entries {
-		c.labels[i].Resize(fyne.NewSize(140, c.labels[i].MinSize().Height))
+		c.labels[i].Resize(fyne.NewSize(chartWidth, c.labels[i].MinSize().Height))
 		c.labels[i].Move(pos)
 		pos.Y += c.labels[i].MinSize().Height
-		e.Resize(fyne.NewSize(140, e.MinSize().Height))
+		e.Resize(fyne.NewSize(chartWidth, e.MinSize().Height))
 		e.Move(pos)
 		pos.Y += e.MinSize().Height
 	}
-	c.Image.Resize(fyne.NewSize(140, 60))
-	c.Image.Move(pos)
+	c.chart.Resize(fyne.NewSize(chartWidth, chartHeight))
+	c.chart.Move(pos)
 }
-func (c *Component) MinSize() fyne.Size {
-	res := fyne.NewSize(140, 60)
+func (c *component) MinSize() fyne.Size {
+	res := fyne.NewSize(chartWidth, chartHeight)
 	for _, e := range c.entries {
 		res.Height += e.MinSize().Height
 	}
@@ -157,7 +152,7 @@ func (c *Component) MinSize() fyne.Size {
 	}
 	return res
 }
-func (c *Component) Refresh() {
+func (c *component) Refresh() {
 	c.renderChart()
 	for _, e := range c.entries {
 		e.Refresh()
@@ -166,13 +161,13 @@ func (c *Component) Refresh() {
 		l.Refresh()
 	}
 }
-func (c *Component) Destroy() {}
-func (c *Component) Objects() []fyne.CanvasObject {
+func (c *component) Destroy() {}
+func (c *component) Objects() []fyne.CanvasObject {
 	res := []fyne.CanvasObject{}
 	for i, e := range c.entries {
 		res = append(res, c.labels[i])
 		res = append(res, e)
 	}
-	res = append(res, c.Image)
+	res = append(res, c.chart)
 	return res
 }

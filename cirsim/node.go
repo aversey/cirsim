@@ -11,52 +11,50 @@ import (
 	"github.com/wcharczuk/go-chart/v2/drawing"
 )
 
-type Node struct {
+type node struct {
 	widget.BaseWidget
-	Pos             fyne.Position
-	VoltageOverTime []float64
-	VoltageRange    chart.Range
-	AComponents     []*Component
-	BComponents     []*Component
-	Image           *canvas.Image
+	pos             fyne.Position
+	voltageOverTime []float64
+	voltageRange    chart.Range
+	chart           *canvas.Image
 }
 
-func NewNode(settings io.Reader, r chart.Range) *Node {
-	var n Node
-	_, err := fmt.Fscanf(settings, "%f %f\n", &n.Pos.X, &n.Pos.Y)
+func newNode(settings io.Reader, r chart.Range) *node {
+	var n node
+	_, err := fmt.Fscanf(settings, "%f %f\n", &n.pos.X, &n.pos.Y)
 	if err != nil {
 		return nil
 	}
-	n.VoltageRange = r
-	n.VoltageOverTime = make([]float64, 1000)
-	for i := range n.VoltageOverTime {
-		n.VoltageOverTime[i] = 0
+	n.voltageRange = r
+	n.voltageOverTime = make([]float64, iterations)
+	for i := range n.voltageOverTime {
+		n.voltageOverTime[i] = 0
 	}
 	n.renderChart()
 	return &n
 }
 
-func (n *Node) renderChart() {
+func (n *node) renderChart() {
 	graph := chart.Chart{
-		Width:        140,
-		Height:       60,
+		Width:        chartWidth,
+		Height:       chartHeight,
 		ColorPalette: &nodeColorPalette{},
 		XAxis:        chart.HideXAxis(),
 		YAxis: chart.YAxis{
 			Style: chart.Hidden(),
-			Range: n.VoltageRange,
+			Range: n.voltageRange,
 		},
 		Series: []chart.Series{
 			chart.ContinuousSeries{
-				XValues: chart.LinearRange(0, 999),
-				YValues: n.VoltageOverTime,
+				XValues: chart.LinearRange(0, float64(iterations)-1),
+				YValues: n.voltageOverTime,
 			},
 		},
 	}
 	writer := &chart.ImageWriter{}
 	graph.Render(chart.PNG, writer)
 	img, _ := writer.Image()
-	n.Image = canvas.NewImageFromImage(img)
+	n.chart = canvas.NewImageFromImage(img)
 }
 
 type nodeColorPalette struct{}
@@ -68,7 +66,12 @@ func (*nodeColorPalette) BackgroundStrokeColor() drawing.Color {
 	return drawing.ColorTransparent
 }
 func (*nodeColorPalette) CanvasColor() drawing.Color {
-	return drawing.Color{R: 249, G: 254, B: 172, A: 128}
+	return drawing.Color{
+		R: voltageCanvasR,
+		G: voltageCanvasG,
+		B: voltageCanvasB,
+		A: voltageCanvasA,
+	}
 }
 func (*nodeColorPalette) CanvasStrokeColor() drawing.Color {
 	return drawing.ColorTransparent
@@ -80,17 +83,17 @@ func (*nodeColorPalette) TextColor() drawing.Color {
 	return drawing.ColorTransparent
 }
 func (*nodeColorPalette) GetSeriesColor(index int) drawing.Color {
-	return drawing.Color{R: 247, G: 239, B: 3, A: 255}
+	return drawing.Color{R: voltageR, G: voltageG, B: voltageB, A: voltageA}
 }
 
-func (n *Node) CreateRenderer() fyne.WidgetRenderer { return n }
-func (n *Node) Layout(s fyne.Size) {
-	n.Image.Resize(s)
-	n.Image.Move(fyne.NewPos(0, 0))
+func (n *node) CreateRenderer() fyne.WidgetRenderer { return n }
+func (n *node) Layout(s fyne.Size) {
+	n.chart.Resize(s)
+	n.chart.Move(fyne.NewPos(0, 0))
 }
-func (n *Node) MinSize() fyne.Size { return n.Image.MinSize() }
-func (n *Node) Refresh()           { n.renderChart() }
-func (n *Node) Destroy()           {}
-func (n *Node) Objects() []fyne.CanvasObject {
-	return []fyne.CanvasObject{n.Image}
+func (n *node) MinSize() fyne.Size { return n.chart.MinSize() }
+func (n *node) Refresh()           { n.renderChart() }
+func (n *node) Destroy()           {}
+func (n *node) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{n.chart}
 }

@@ -3,6 +3,7 @@ package cirsim
 import (
 	"fmt"
 	"image/color"
+	"io"
 	"log"
 	"os"
 
@@ -15,13 +16,36 @@ import (
 	"gonum.org/v1/gonum/mat"
 )
 
-type Simulation struct {
-	Period       float64
-	Size         fyne.Size
-	Nodes        []*Node
-	Components   []*Component
-	VoltageRange chart.ContinuousRange
-	CurrentRange chart.ContinuousRange
+const (
+	defaultPeriod  float64 = 0.01
+	iterations     int     = 1000
+	chartWidth             = 140
+	chartHeight            = 60
+	currentCanvasR uint8   = 191
+	currentCanvasG         = 254
+	currentCanvasB         = 247
+	currentCanvasA         = 128
+	currentR               = 3
+	currentG               = 247
+	currentB               = 198
+	currentA               = 255
+	voltageCanvasR         = 249
+	voltageCanvasG         = 254
+	voltageCanvasB         = 172
+	voltageCanvasA         = 128
+	voltageR               = 247
+	voltageG               = 239
+	voltageB               = 3
+	voltageA               = 255
+)
+
+type simulation struct {
+	period       float64
+	size         fyne.Size
+	nodes        []*node
+	components   []*component
+	voltageRange chart.ContinuousRange
+	currentRange chart.ContinuousRange
 	periodEntry  *widget.Entry
 	voltageLabel *canvas.Text
 	currentLabel *canvas.Text
@@ -29,244 +53,222 @@ type Simulation struct {
 
 func New() fyne.CanvasObject {
 	background := canvas.NewRectangle(color.White)
-	image := canvas.NewImageFromFile("circuit.svg")
-	file, err := os.Open("circuit")
+	circuit := canvas.NewImageFromFile("circuit.svg")
+	settings, err := os.Open("circuit")
 	if err != nil {
 		log.Fatal(err)
 	}
-	var sim Simulation
-	sim.Period = 0.01
-	sim.VoltageRange = chart.ContinuousRange{Min: 0, Max: 0}
-	sim.CurrentRange = chart.ContinuousRange{Min: 0, Max: 0}
-	fmt.Fscanf(file, "%f %f\n\n", &sim.Size.Width, &sim.Size.Height)
+	var sim simulation
+	sim.period = defaultPeriod
+	sim.voltageRange = chart.ContinuousRange{Min: 0, Max: 0}
+	sim.currentRange = chart.ContinuousRange{Min: 0, Max: 0}
+	fmt.Fscanf(settings, "%f %f\n\n", &sim.size.Width, &sim.size.Height)
+	cont := container.New(&sim, sim.newPanel(settings), background, circuit)
+	sim.addNodes(cont, settings)
+	sim.addComponents(cont, settings)
+	settings.Close()
+	sim.update()
+	return cont
+}
+
+func (sim *simulation) newPanel(settings io.Reader) *fyne.Container {
 	sim.voltageLabel = canvas.NewText(
 		fmt.Sprintf(" %e < voltage < %e ",
-			sim.VoltageRange.Min, sim.VoltageRange.Max),
-		color.RGBA{R: 247, G: 239, B: 3, A: 255},
+			sim.voltageRange.Min, sim.voltageRange.Max),
+		color.RGBA{R: voltageR, G: voltageG, B: voltageB, A: voltageA},
 	)
 	sim.voltageLabel.TextStyle.Monospace = true
 	sim.currentLabel = canvas.NewText(
 		fmt.Sprintf(" %e < current < %e ",
-			sim.CurrentRange.Min, sim.CurrentRange.Max),
-		color.RGBA{R: 3, G: 247, B: 198, A: 255},
+			sim.currentRange.Min, sim.currentRange.Max),
+		color.RGBA{R: currentR, G: currentG, B: currentB, A: currentA},
 	)
 	sim.currentLabel.TextStyle.Monospace = true
 	periodLabel := widget.NewLabel("Period")
 	periodLabel.TextStyle.Monospace = true
 	sim.periodEntry = widget.NewEntry()
 	sim.periodEntry.TextStyle.Monospace = true
-	sim.periodEntry.SetPlaceHolder("default: 0.01s")
+	sim.periodEntry.SetPlaceHolder(fmt.Sprintf("default: %fs", defaultPeriod))
 	sim.periodEntry.OnSubmitted = sim.updatePeriod
-	c := container.New(&sim,
-		container.NewHBox(
-			sim.voltageLabel,
-			sim.currentLabel,
-			layout.NewSpacer(),
-			periodLabel,
-			container.New(&entryLayout{}, sim.periodEntry),
-		),
-		background,
-		image,
+	return container.NewHBox(
+		sim.voltageLabel,
+		sim.currentLabel,
+		layout.NewSpacer(),
+		periodLabel,
+		container.New(&entryLayout{}, sim.periodEntry),
 	)
-	for n := NewNode(file, &sim.VoltageRange); n != nil; n = NewNode(file, &sim.VoltageRange) {
-		sim.Nodes = append(sim.Nodes, n)
-		c.Add(n)
-	}
-	for component := NewComponent(file, &sim.CurrentRange, sim.Nodes, sim.simulate); component != nil; component = NewComponent(file, &sim.CurrentRange, sim.Nodes, sim.simulate) {
-		sim.Components = append(sim.Components, component)
-		c.Add(component)
-	}
-	file.Close()
-	sim.simulate()
-	return c
 }
 
-func (sim *Simulation) simulate() {
-	for _, n := range sim.Nodes {
-		for i := range n.VoltageOverTime {
-			n.VoltageOverTime[i] = 0
-		}
+func (sim *simulation) addNodes(cont *fyne.Container, settings io.Reader) {
+	n := newNode(settings, &sim.voltageRange)
+	for n != nil {
+		sim.nodes = append(sim.nodes, n)
+		cont.Add(n)
+		n = newNode(settings, &sim.voltageRange)
 	}
-	for _, c := range sim.Components {
-		for i := range c.CurrentOverTime {
-			c.CurrentOverTime[i] = 0
-		}
+}
+
+func (sim *simulation) addComponents(cont *fyne.Container, settings io.Reader) {
+	c := newComponent(settings, &sim.currentRange, sim.update)
+	for c != nil {
+		sim.components = append(sim.components, c)
+		cont.Add(c)
+		c = newComponent(settings, &sim.currentRange, sim.update)
 	}
-	maxv := 0.0
-	minv := 0.0
-	maxc := 0.0
-	minc := 0.0
-	for i := 0; i != 1000; i++ {
-		N := len(sim.Nodes)
-		for refine := 0; refine != 10; refine++ {
-			m := mat.NewDense(N+1, N, nil)
-			v := mat.NewVecDense(N+1, nil)
-			for j, n := range sim.Nodes {
-				for _, c := range sim.Components {
-					if c.ANode == n {
-						v.SetVec(j, v.AtVec(j)-c.Model.ModelCurrent(
-							float64(i)*sim.Period/1000, sim.Period/1000,
-							c.BNode.VoltageOverTime[i]-n.VoltageOverTime[i],
-							c.CurrentOverTime[i]))
-						d := 0
-						for k, v := range sim.Nodes {
-							if c.BNode == v {
-								d = k
-								break
-							}
-						}
-						m.Set(j, d, m.At(j, d)-
-							c.Model.ModelConductance(
-								float64(i)*sim.Period/1000, sim.Period/1000,
-								c.BNode.VoltageOverTime[i]-n.VoltageOverTime[i],
-								c.CurrentOverTime[i]))
-						m.Set(j, j, m.At(j, j)+
-							c.Model.ModelConductance(
-								float64(i)*sim.Period/1000, sim.Period/1000,
-								c.BNode.VoltageOverTime[i]-n.VoltageOverTime[i],
-								c.CurrentOverTime[i]))
-					} else if c.BNode == n {
-						v.SetVec(j, v.AtVec(j)+c.Model.ModelCurrent(
-							float64(i)*sim.Period/1000, sim.Period/1000,
-							n.VoltageOverTime[i]-c.ANode.VoltageOverTime[i],
-							c.CurrentOverTime[i]))
-						d := 0
-						for k, v := range sim.Nodes {
-							if c.ANode == v {
-								d = k
-								break
-							}
-						}
-						m.Set(j, d, m.At(j, d)-
-							c.Model.ModelConductance(
-								float64(i)*sim.Period/1000, sim.Period/1000,
-								n.VoltageOverTime[i]-c.ANode.VoltageOverTime[i],
-								c.CurrentOverTime[i]))
-						m.Set(j, j, m.At(j, j)+
-							c.Model.ModelConductance(
-								float64(i)*sim.Period/1000, sim.Period/1000,
-								n.VoltageOverTime[i]-c.ANode.VoltageOverTime[i],
-								c.CurrentOverTime[i]))
-					}
-				}
-			}
-			r := make([]float64, N)
-			for j := 0; j != N-1; j++ {
-				r[j] = 0
-			}
-			r[N-1] = 1
-			m.SetRow(N, r)
-			v.SetVec(N, 0)
-			res := mat.NewVecDense(N, nil)
-			res.SolveVec(m, v)
-			for j, n := range sim.Nodes {
-				n.VoltageOverTime[i] = res.AtVec(j)
-			}
-			for _, c := range sim.Components {
-				c.CurrentOverTime[i] = (c.ANode.VoltageOverTime[i]-c.BNode.VoltageOverTime[i])*
-					c.Model.ModelConductance(
-						float64(i)*sim.Period/1000, sim.Period/1000,
-						c.BNode.VoltageOverTime[i]-c.ANode.VoltageOverTime[i],
-						c.CurrentOverTime[i]) +
-					c.Model.ModelCurrent(
-						float64(i)*sim.Period/1000, sim.Period/1000,
-						c.BNode.VoltageOverTime[i]-c.ANode.VoltageOverTime[i],
-						c.CurrentOverTime[i])
-			}
-		}
-		if i == 999 {
-			break
-		}
-		for _, n := range sim.Nodes {
-			n.VoltageOverTime[i+1] = n.VoltageOverTime[i]
-			if n.VoltageOverTime[i] > maxv {
-				maxv = n.VoltageOverTime[i]
-			} else if n.VoltageOverTime[i] < minv {
-				minv = n.VoltageOverTime[i]
-			}
-		}
-		for _, c := range sim.Components {
-			c.CurrentOverTime[i+1] = c.CurrentOverTime[i]
-			if c.CurrentOverTime[i] > maxc {
-				maxc = c.CurrentOverTime[i]
-			} else if c.CurrentOverTime[i] < minc {
-				minc = c.CurrentOverTime[i]
+}
+
+func (sim *simulation) update() {
+	sim.simulate()
+	sim.voltageRange.Max = 0
+	sim.voltageRange.Min = 0
+	for _, n := range sim.nodes {
+		for _, v := range n.voltageOverTime {
+			if v > sim.voltageRange.Max {
+				sim.voltageRange.Max = v
+			} else if v < sim.voltageRange.Min {
+				sim.voltageRange.Min = v
 			}
 		}
 	}
-	sim.VoltageRange.Max = maxv
-	sim.VoltageRange.Min = minv
-	sim.CurrentRange.Max = maxc
-	sim.CurrentRange.Min = minc
+	sim.currentRange.Max = sim.components[0].currentOverTime[0]
+	sim.currentRange.Min = sim.components[0].currentOverTime[0]
+	for _, comp := range sim.components {
+		for _, c := range comp.currentOverTime {
+			if c > sim.currentRange.Max {
+				sim.currentRange.Max = c
+			} else if c < sim.currentRange.Min {
+				sim.currentRange.Min = c
+			}
+		}
+	}
 	sim.voltageLabel.Text = fmt.Sprintf(" %e < voltage < %e ",
-		sim.VoltageRange.Min, sim.VoltageRange.Max)
+		sim.voltageRange.Min, sim.voltageRange.Max)
 	sim.currentLabel.Text = fmt.Sprintf(" %e < current < %e ",
-		sim.CurrentRange.Min, sim.CurrentRange.Max)
+		sim.currentRange.Min, sim.currentRange.Max)
 	sim.voltageLabel.Refresh()
 	sim.currentLabel.Refresh()
-	for _, n := range sim.Nodes {
+	for _, n := range sim.nodes {
 		n.Refresh()
 	}
-	for _, c := range sim.Components {
+	for _, c := range sim.components {
 		c.Refresh()
 	}
 }
 
-func (sim *Simulation) updatePeriod(period string) {
-	_, err := fmt.Sscanf(period+"\n", "%f\n", &sim.Period)
-	if err != nil {
-		sim.periodEntry.SetText(fmt.Sprintf("%f", sim.Period))
-	} else {
-		sim.simulate()
-	}
-}
-
-func (l *Simulation) MinSize(objects []fyne.CanvasObject) fyne.Size {
-	s := fyne.NewSize(0, 0)
-	for _, i := range objects {
-		switch o := i.(type) {
-		case *canvas.Image:
-			s = o.MinSize()
-		default:
+func (sim *simulation) simulate() {
+	sim.nullify()
+	N := len(sim.nodes)
+	delta := sim.period / float64(iterations)
+	for i := 0; i != iterations; i++ {
+		// fill conductances and currents:
+		time := float64(i) * sim.period / float64(iterations)
+		conductances := mat.NewDense(N+1, N, nil)
+		currents := mat.NewVecDense(N+1, nil)
+		for _, c := range sim.components {
+			voltage := sim.nodes[c.nodes[1]].voltageOverTime[i] -
+				sim.nodes[c.nodes[0]].voltageOverTime[i]
+			current := c.current(time, delta, voltage, c.currentOverTime[i])
+			cond := c.conductance(time, delta, voltage, c.currentOverTime[i])
+			currents.SetVec(c.nodes[1], currents.AtVec(c.nodes[1])-current)
+			currents.SetVec(c.nodes[0], currents.AtVec(c.nodes[0])+current)
+			conductances.Set(c.nodes[1], c.nodes[1],
+				conductances.At(c.nodes[1], c.nodes[1])+cond)
+			conductances.Set(c.nodes[0], c.nodes[0],
+				conductances.At(c.nodes[0], c.nodes[0])+cond)
+			conductances.Set(c.nodes[1], c.nodes[0],
+				conductances.At(c.nodes[1], c.nodes[0])-cond)
+			conductances.Set(c.nodes[0], c.nodes[1],
+				conductances.At(c.nodes[0], c.nodes[1])-cond)
+		}
+		// set up additional row to determine ground node:
+		groundNodeRow := make([]float64, N)
+		groundNodeRow[0] = 1
+		for j := 1; j != N; j++ {
+			groundNodeRow[j] = 0
+		}
+		conductances.SetRow(N, groundNodeRow)
+		currents.SetVec(N, 0)
+		// solve the equation:
+		voltages := mat.NewVecDense(N, nil)
+		voltages.SolveVec(conductances, currents)
+		// save results:
+		for j, n := range sim.nodes {
+			n.voltageOverTime[i] = voltages.AtVec(j)
+		}
+		for _, c := range sim.components {
+			voltage := voltages.AtVec(c.nodes[1]) - voltages.AtVec(c.nodes[0])
+			current := c.current(time, delta, voltage, c.currentOverTime[i])
+			cond := c.conductance(time, delta, voltage, c.currentOverTime[i])
+			c.currentOverTime[i] = voltage*cond + current
 		}
 	}
-	return s
 }
 
-func (l *Simulation) Layout(obs []fyne.CanvasObject, size fyne.Size) {
+func (sim *simulation) nullify() {
+	for _, n := range sim.nodes {
+		for i := range n.voltageOverTime {
+			n.voltageOverTime[i] = 0
+		}
+	}
+	for _, c := range sim.components {
+		for i := range c.currentOverTime {
+			c.currentOverTime[i] = 0
+		}
+	}
+}
+
+func (sim *simulation) updatePeriod(period string) {
+	_, err := fmt.Sscanf(period+"\n", "%f\n", &sim.period)
+	if err != nil {
+		sim.periodEntry.SetText(fmt.Sprintf("%f", sim.period))
+	} else {
+		sim.update()
+	}
+}
+
+func (l *simulation) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	return objects[2].MinSize()
+}
+func (l *simulation) Layout(obs []fyne.CanvasObject, size fyne.Size) {
 	var p fyne.Position
 	var s fyne.Size
-	panel_height := obs[0].MinSize().Height
-	H := size.Height - panel_height
+	panelHeight := obs[0].MinSize().Height
+	H := size.Height - panelHeight
 	W := size.Width
-	h := l.Size.Height
-	w := l.Size.Width
+	h := l.size.Height
+	w := l.size.Width
 	var scale float32
 	if H/W > h/w {
-		p = fyne.NewPos(0, (H-W*h/w)/2+panel_height)
+		p = fyne.NewPos(0, (H-W*h/w)/2+panelHeight)
 		s = fyne.NewSize(W, W*h/w)
 		scale = W / w
 	} else {
-		p = fyne.NewPos((W-H*w/h)/2, panel_height)
+		p = fyne.NewPos((W-H*w/h)/2, panelHeight)
 		s = fyne.NewSize(H*w/h, H)
 		scale = H / h
 	}
-	obs[0].Resize(fyne.NewSize(W, panel_height))
+	obs[0].Resize(fyne.NewSize(W, panelHeight))
 	obs[0].Move(fyne.NewPos(0, 0))
 	obs[1].Resize(size)
-	obs[1].Move(fyne.NewPos(0, panel_height))
+	obs[1].Move(fyne.NewPos(0, panelHeight))
 	obs[2].Resize(s)
 	obs[2].Move(p)
-	for i, n := range l.Nodes {
-		obs[3+i].Resize(fyne.NewSize(140, 60))
-		shift := fyne.NewPos(p.X+n.Pos.X*scale-70, p.Y+n.Pos.Y*scale-30)
+	for i, n := range l.nodes {
+		obs[3+i].Resize(fyne.NewSize(chartWidth, chartHeight))
+		shift := fyne.NewPos(
+			p.X+n.pos.X*scale-chartWidth/2.0,
+			p.Y+n.pos.Y*scale-chartHeight/2.0,
+		)
 		obs[3+i].Move(shift)
 	}
-	for i, c := range l.Components {
-		ms := obs[3+len(l.Nodes)+i].MinSize()
-		obs[3+len(l.Nodes)+i].Resize(ms)
-		shift := fyne.NewPos(p.X+c.Pos.X*scale-70, p.Y+c.Pos.Y*scale-ms.Height+30)
-		obs[3+len(l.Nodes)+i].Move(shift)
+	for i, c := range l.components {
+		ms := obs[3+len(l.nodes)+i].MinSize()
+		obs[3+len(l.nodes)+i].Resize(ms)
+		shift := fyne.NewPos(
+			p.X+c.pos.X*scale-chartWidth/2.0,
+			p.Y+c.pos.Y*scale-ms.Height+chartHeight/2.0,
+		)
+		obs[3+len(l.nodes)+i].Move(shift)
 	}
 }
 
@@ -274,7 +276,7 @@ type entryLayout struct{}
 
 func (*entryLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	return fyne.NewSize(
-		objects[0].MinSize().Width*4,
+		objects[0].MinSize().Width*6,
 		objects[0].MinSize().Height,
 	)
 }

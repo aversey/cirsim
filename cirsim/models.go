@@ -1,102 +1,144 @@
 package cirsim
 
-import "math"
+import (
+	"log"
+	"math"
+)
 
-type Modeler interface {
-	ModelConductance(time, delta, voltage, current float64) float64
-	ModelCurrent(time, delta, voltage, current float64) float64
-	Parameters() map[string]float64
-	UpdateParameter(name string, value float64)
+type modeler interface {
+	conductance(time, delta, voltage, current float64) float64
+	current(time, delta, voltage, current float64) float64
+	parameters() map[string]float64
+	updateParameter(name string, value float64)
 }
 
-type Capacitor struct {
-	Capacitance float64
+func newModeler(name string) modeler {
+	switch name {
+	case "resistor":
+		return newResistor()
+	case "capacitor":
+		return newCapacitor()
+	case "inductor":
+		return newInductor()
+	case "diode":
+		return newDiode()
+	case "power":
+		return newPower()
+	default:
+		log.Fatal("wrong component name")
+		// compiler wants return here, but it will be never executed:
+		return nil
+	}
 }
 
-func (m *Capacitor) ModelConductance(time, delta, voltage, current float64) float64 {
-	return 2.0 * m.Capacitance / delta
+type capacitor struct {
+	capacitance float64
 }
-func (m *Capacitor) ModelCurrent(time, delta, voltage, current float64) float64 {
-	return -current - voltage*2*m.Capacitance/delta
+
+func newCapacitor() *capacitor {
+	return &capacitor{0.000001}
 }
-func (m *Capacitor) Parameters() map[string]float64 {
-	return map[string]float64{"Capacitance": m.Capacitance}
+
+func (m *capacitor) conductance(time, delta, voltage, current float64) float64 {
+	return 2.0 * m.capacitance / delta
 }
-func (m *Capacitor) UpdateParameter(name string, value float64) {
+func (m *capacitor) current(time, delta, voltage, current float64) float64 {
+	return -current - voltage*2*m.capacitance/delta
+}
+func (m *capacitor) parameters() map[string]float64 {
+	return map[string]float64{"Capacitance": m.capacitance}
+}
+func (m *capacitor) updateParameter(name string, value float64) {
 	if name == "Capacitance" {
-		m.Capacitance = value
+		m.capacitance = value
 	}
 }
 
-type Resistor struct {
-	Resistance float64
+type resistor struct {
+	resistance float64
 }
 
-func (m *Resistor) ModelConductance(time, delta, voltage, current float64) float64 {
-	return 1.0 / m.Resistance
+func newResistor() *resistor {
+	return &resistor{100.0}
 }
-func (m *Resistor) ModelCurrent(time, delta, voltage, current float64) float64 {
+
+func (m *resistor) conductance(time, delta, voltage, current float64) float64 {
+	return 1.0 / m.resistance
+}
+func (m *resistor) current(time, delta, voltage, current float64) float64 {
 	return 0
 }
-func (m *Resistor) Parameters() map[string]float64 {
-	return map[string]float64{"Resistance": m.Resistance}
+func (m *resistor) parameters() map[string]float64 {
+	return map[string]float64{"Resistance": m.resistance}
 }
-func (m *Resistor) UpdateParameter(name string, value float64) {
+func (m *resistor) updateParameter(name string, value float64) {
 	if name == "Resistance" {
-		m.Resistance = value
+		m.resistance = value
 	}
 }
 
-type Inductor struct {
-	Inductance float64
+type inductor struct {
+	inductance float64
 }
 
-func (m *Inductor) ModelConductance(time, delta, voltage, current float64) float64 {
-	return delta / (2.0 * m.Inductance)
+func newInductor() *inductor {
+	return &inductor{0.000001}
 }
-func (m *Inductor) ModelCurrent(time, delta, voltage, current float64) float64 {
-	return current + voltage*delta/(2*m.Inductance)
+
+func (m *inductor) conductance(time, delta, voltage, current float64) float64 {
+	return delta / (2.0 * m.inductance)
 }
-func (m *Inductor) Parameters() map[string]float64 {
-	return map[string]float64{"Inductance": m.Inductance}
+func (m *inductor) current(time, delta, voltage, current float64) float64 {
+	return current + voltage*delta/(2*m.inductance)
 }
-func (m *Inductor) UpdateParameter(name string, value float64) {
+func (m *inductor) parameters() map[string]float64 {
+	return map[string]float64{"Inductance": m.inductance}
+}
+func (m *inductor) updateParameter(name string, value float64) {
 	if name == "Inductance" {
-		m.Inductance = value
+		m.inductance = value
 	}
 }
 
-type Diode struct{}
+type diode struct{}
 
-func (m *Diode) ModelConductance(time, delta, voltage, current float64) float64 {
+func newDiode() *diode {
+	return &diode{}
+}
+
+func (m *diode) conductance(time, delta, voltage, current float64) float64 {
 	return 0
 }
-func (m *Diode) ModelCurrent(time, delta, voltage, current float64) float64 {
+func (m *diode) current(time, delta, voltage, current float64) float64 {
 	return 0
 }
-func (m *Diode) Parameters() map[string]float64 {
+func (m *diode) parameters() map[string]float64 {
 	return map[string]float64{}
 }
-func (m *Diode) UpdateParameter(name string, value float64) {}
+func (m *diode) updateParameter(name string, value float64) {}
 
-type Power struct {
-	Current   float64
-	Frequency float64
+type power struct {
+	maxCurrent float64
+	frequency  float64
 }
 
-func (m *Power) ModelConductance(time, delta, voltage, current float64) float64 {
+func newPower() *power {
+	return &power{maxCurrent: 1.0, frequency: 1000.0}
+}
+
+func (m *power) conductance(time, delta, voltage, current float64) float64 {
 	return 0
 }
-func (m *Power) ModelCurrent(time, delta, voltage, current float64) float64 {
-	return m.Current * math.Sin(time*m.Frequency*2*math.Pi)
+func (m *power) current(time, delta, voltage, current float64) float64 {
+	return m.maxCurrent * math.Sin(time*m.frequency*2*math.Pi)
 }
-func (m *Power) Parameters() map[string]float64 {
-	return map[string]float64{"Current": m.Current, "Frequency": m.Frequency}
+func (m *power) parameters() map[string]float64 {
+	return map[string]float64{"Current": m.maxCurrent, "Frequency": m.frequency}
 }
-func (m *Power) UpdateParameter(name string, value float64) {
+func (m *power) updateParameter(name string, value float64) {
 	if name == "Current" {
-		m.Current = value
+		m.maxCurrent = value
 	} else if name == "Frequency" {
-		m.Frequency = value
+		m.frequency = value
 	}
 }
