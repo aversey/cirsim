@@ -1,4 +1,4 @@
-package cirsim
+package cirsim_fyne
 
 import (
 	"fmt"
@@ -26,15 +26,10 @@ func newNode(settings io.Reader, r chart.Range) *node {
 		return nil
 	}
 	n.voltageRange = r
-	n.voltageOverTime = make([]float64, iterations)
-	for i := range n.voltageOverTime {
-		n.voltageOverTime[i] = 0
-	}
-	n.renderChart()
 	return &n
 }
 
-func (n *node) renderChart() {
+func (n *node) renderChart(voltageOverTime []float64) {
 	graph := chart.Chart{
 		Width:        chartWidth,
 		Height:       chartHeight,
@@ -46,8 +41,8 @@ func (n *node) renderChart() {
 		},
 		Series: []chart.Series{
 			chart.ContinuousSeries{
-				XValues: chart.LinearRange(0, float64(iterations)-1),
-				YValues: n.voltageOverTime,
+				XValues: chart.LinearRange(0, float64(len(voltageOverTime))-1),
+				YValues: voltageOverTime,
 			},
 		},
 	}
@@ -92,7 +87,7 @@ func (n *node) Layout(s fyne.Size) {
 	n.chart.Move(fyne.NewPos(0, 0))
 }
 func (n *node) MinSize() fyne.Size { return n.chart.MinSize() }
-func (n *node) Refresh()           { n.renderChart() }
+func (n *node) Refresh()           {}
 func (n *node) Destroy()           {}
 func (n *node) Objects() []fyne.CanvasObject {
 	return []fyne.CanvasObject{n.chart}

@@ -4,7 +4,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/theme"
-	"git.veresov.xyz/aversey/cirsim/cirsim"
+	"git.veresov.xyz/aversey/cirsim/cirsim_fyne"
 )
 
 func main() {
@@ -13,6 +13,6 @@ func main() {
 	w := a.NewWindow("Circuit Simulator")
 	w.Resize(fyne.NewSize(1280, 720))
 	w.SetIcon(theme.SettingsIcon())
-	w.SetContent(cirsim.New())
+	w.SetContent(cirsim_fyne.New())
 	w.ShowAndRun()
 }
