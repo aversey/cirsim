@@ -13,10 +13,9 @@ import (
 
 type node struct {
 	widget.BaseWidget
-	pos             fyne.Position
-	voltageOverTime []float64
-	voltageRange    chart.Range
-	chart           *canvas.Image
+	pos          fyne.Position
+	voltageRange chart.Range
+	chart        *canvas.Image
 }
 
 func newNode(settings io.Reader, r chart.Range) *node {
